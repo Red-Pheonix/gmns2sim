@@ -29,6 +29,11 @@ def build_turn_movements_by_node(
         "right": "turn_right",
     }
     
+    # process link data for lane counts
+    link_to_lanenums = gmns_data["link"].set_index("link_id")["lanes"].dropna().astype(int)
+    link_to_lanenums = link_to_lanenums[link_to_lanenums > 0].to_dict()
+    
+    
     # process movement data
     movement_df = gmns_data["movement"].copy()
 
@@ -49,6 +54,24 @@ def build_turn_movements_by_node(
     )
     movement_df["end_ob_lane"] = movement_df["end_ob_lane"].fillna(
         movement_df["start_ob_lane"]
+    )
+    
+    # get rid of extra lanes
+    movement_df["start_ib_lane"] = movement_df.apply(
+        lambda r: min(r["start_ib_lane"], link_to_lanenums.get(r["ib_link_id"], r["start_ib_lane"])),
+        axis=1
+    )
+    movement_df["end_ib_lane"] = movement_df.apply(
+        lambda r: min(r["end_ib_lane"], link_to_lanenums.get(r["ib_link_id"], r["end_ib_lane"])),
+        axis=1
+    )
+    movement_df["start_ob_lane"] = movement_df.apply(
+        lambda r: min(r["start_ob_lane"], link_to_lanenums.get(r["ob_link_id"], r["start_ob_lane"])),
+        axis=1
+    )
+    movement_df["end_ob_lane"] = movement_df.apply(
+        lambda r: min(r["end_ob_lane"], link_to_lanenums.get(r["ob_link_id"], r["end_ob_lane"])),
+        axis=1
     )
 
     turn_movements_by_node = {}

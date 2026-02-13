@@ -52,30 +52,11 @@ def build_valid_phase_combinations(
                 combo_df = combo_df[combo_df["mvmt_ids"].notna()]
                 if len(combo_df) < 2:
                     continue
-
-                combo_df["movements"] = combo_df["mvmt_ids"].apply(
-                    lambda ids: list(
-                        {
-                            (m["startRoad"], m["endRoad"]): m
-                            for mvmt_id in (ids or [])
-                            if (m := movement_index.get(str(mvmt_id)))
-                        }.values()
-                    )
-                )
-
-                if combo_df.empty:
-                    continue
-
-                # flatten + deduplicate movements
-                all_movements = [
-                    m for ms in combo_df["movements"] for m in ms
-                ]
-                all_movements = list(
-                    {
-                        (m["startRoad"], m["endRoad"]): m
-                        for m in all_movements
-                    }.values()
-                )
+                
+                # grab all movements and delete duplicates
+                mvmt_ids = list({m for ms in combo_df["mvmt_ids"] for m in ms})
+                all_movements = [movement_index.get(str(mvmt_id)) for mvmt_id in mvmt_ids]
+                all_movements = [m for m in all_movements if m is not None]
 
                 # apply bounds
                 final_min_green = max(min_green, combo_df["min_green"].max())
@@ -103,6 +84,7 @@ def build_valid_phase_combinations(
                     "ped_clearance": int(final_ped_clearance),
                     "veh_ext": int(final_veh_ext),
                     "movements": all_movements,
+                    "mvmt_ids": mvmt_ids,
                 }
 
                 valid_phase_combinations[timing_plan_id].append(
