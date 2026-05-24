@@ -1,0 +1,1085 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>CityFlow Network Viewer</title>
+<style>
+  :root {
+    --bg: #1e1f24;
+    --panel: #2a2c33;
+    --panel-2: #34373f;
+    --text: #e6e6e6;
+    --muted: #9aa0a6;
+    --accent: #4ea1ff;
+    --road: #6b7280;
+    --road-edge: #404756;
+    --intersection: #f59e0b;
+    --intersection-virtual: #5b8def;
+    --selected: #22c55e;
+    --hover: #ef4444;
+  }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden;
+  }
+  #app { display: flex; height: 100%; }
+  #sidebar {
+    width: 320px;
+    background: var(--panel);
+    border-right: 1px solid #000;
+    display: flex; flex-direction: column;
+    flex-shrink: 0;
+  }
+  #sidebar header {
+    padding: 12px 14px;
+    border-bottom: 1px solid #000;
+    background: var(--panel-2);
+  }
+  #sidebar header h1 {
+    font-size: 14px; margin: 0 0 4px 0;
+  }
+  #sidebar header .sub {
+    font-size: 11px; color: var(--muted);
+  }
+  #controls {
+    padding: 10px 14px;
+    border-bottom: 1px solid #1a1b1f;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  #controls .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  button, label.btn {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid #1a1b1f;
+    padding: 5px 10px; border-radius: 4px;
+    cursor: pointer; font-size: 12px;
+  }
+  button:hover, label.btn:hover { background: #404552; }
+  input[type="file"] { display: none; }
+  .toggle { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); cursor: pointer; }
+  .toggle input { margin: 0; }
+  #lists {
+    flex: 1;
+    overflow-y: auto;
+  }
+  .list-section {
+    border-bottom: 1px solid #1a1b1f;
+  }
+  .list-section h2 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin: 0;
+    padding: 10px 14px 6px;
+    background: var(--panel);
+    position: sticky; top: 0;
+    cursor: pointer;
+    user-select: none;
+  }
+  .list-section h2 .count { color: #6b7280; font-weight: normal; margin-left: 6px; }
+  .list-section ul { list-style: none; margin: 0; padding: 0 0 6px; }
+  .list-section li {
+    padding: 4px 14px;
+    cursor: pointer;
+    font-size: 12px;
+    border-left: 3px solid transparent;
+    display: flex; justify-content: space-between; gap: 8px;
+  }
+  .list-section li:hover { background: var(--panel-2); }
+  .list-section li.selected { background: #1a3a5c; border-left-color: var(--accent); }
+  .list-section li .meta { color: var(--muted); font-size: 11px; }
+  #main { flex: 1; position: relative; min-width: 0; }
+  #canvas { display: block; width: 100%; height: 100%; cursor: grab; background: #14151a; }
+  #canvas.dragging { cursor: grabbing; }
+  #hud {
+    position: absolute; bottom: 10px; left: 10px;
+    background: rgba(20, 21, 26, 0.85);
+    padding: 6px 10px; border-radius: 4px;
+    font-size: 11px; color: var(--muted);
+    pointer-events: none;
+  }
+  #info {
+    position: absolute; top: 10px; right: 10px;
+    width: 280px; max-height: calc(100% - 20px);
+    overflow-y: auto;
+    background: rgba(42, 44, 51, 0.95);
+    border: 1px solid #1a1b1f;
+    border-radius: 6px;
+    padding: 12px;
+    font-size: 12px;
+    display: none;
+  }
+  #info.show { display: block; }
+  #info h3 {
+    margin: 0 0 8px 0;
+    font-size: 13px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  #info h3 .close { cursor: pointer; color: var(--muted); font-size: 16px; padding: 0 4px; }
+  #info h3 .close:hover { color: var(--text); }
+  #info dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 4px 10px; }
+  #info dt { color: var(--muted); }
+  #info dd { margin: 0; word-break: break-all; }
+  #info .pill {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-size: 10px;
+    background: var(--panel-2);
+    margin-right: 4px;
+    cursor: pointer;
+  }
+  #info .pill:hover { background: var(--accent); color: #fff; }
+  #info pre {
+    background: #14151a;
+    padding: 6px;
+    border-radius: 3px;
+    overflow-x: auto;
+    margin: 4px 0;
+    font-size: 11px;
+  }
+  .tl-block {
+    margin-top: 10px;
+    padding: 8px;
+    background: #14151a;
+    border-radius: 4px;
+    border: 1px solid #1a1b1f;
+  }
+  .tl-block .label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .tl-block select {
+    width: 100%;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid #1a1b1f;
+    padding: 4px 6px;
+    border-radius: 3px;
+    font-size: 12px;
+    margin-bottom: 6px;
+  }
+  .tl-block .tl-controls {
+    display: flex; gap: 4px; margin-bottom: 6px;
+  }
+  .tl-block .tl-controls button {
+    flex: 1;
+    padding: 4px 6px;
+    font-size: 11px;
+  }
+  .tl-block .tl-active {
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.5;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+  .tl-block .tl-active .tag {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin: 1px 2px;
+    background: #14532d;
+    color: #86efac;
+    font-size: 10px;
+  }
+  #drop-overlay {
+    position: absolute; inset: 0;
+    background: rgba(30, 31, 36, 0.95);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted);
+    font-size: 18px;
+    z-index: 10;
+    text-align: center;
+    pointer-events: none;
+  }
+  #drop-overlay.active {
+    background: rgba(78, 161, 255, 0.15);
+    color: var(--accent);
+    border: 3px dashed var(--accent);
+  }
+  #drop-overlay.hidden { display: none; }
+  .legend { display: flex; gap: 10px; align-items: center; font-size: 11px; color: var(--muted); flex-wrap: wrap; }
+  .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 3px; vertical-align: middle; }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <header>
+      <h1>CityFlow Network Viewer</h1>
+      <div class="sub" id="file-label">No file loaded</div>
+    </header>
+    <div id="controls">
+      <div class="row">
+        <label class="btn" for="file-input">Open JSON…</label>
+        <input id="file-input" type="file" accept=".json,application/json" />
+        <button id="fit-btn" title="Fit to view (F)">Fit</button>
+        <button id="reset-btn" title="Reset selection">Clear</button>
+      </div>
+      <div class="row">
+        <label class="toggle"><input type="checkbox" id="t-roads" checked /> Roads</label>
+        <label class="toggle"><input type="checkbox" id="t-intersections" checked /> Intersections</label>
+        <label class="toggle"><input type="checkbox" id="t-labels" /> Labels</label>
+        <label class="toggle"><input type="checkbox" id="t-arrows" checked /> Direction</label>
+        <label class="toggle"><input type="checkbox" id="t-virtual" checked /> Virtual</label>
+        <label class="toggle"><input type="checkbox" id="t-tl" checked /> Traffic light</label>
+      </div>
+      <div class="legend">
+        <span><span class="sw" style="background:#f59e0b"></span>Intersection</span>
+        <span><span class="sw" style="background:#5b8def"></span>Virtual</span>
+        <span><span class="sw" style="background:#6b7280;border-radius:2px"></span>Road</span>
+      </div>
+    </div>
+    <div id="lists">
+      <div class="list-section" data-kind="intersection">
+        <h2>Intersections <span class="count">(0)</span></h2>
+        <ul></ul>
+      </div>
+      <div class="list-section" data-kind="road">
+        <h2>Roads <span class="count">(0)</span></h2>
+        <ul></ul>
+      </div>
+      <div class="list-section" data-kind="trafficLight">
+        <h2>Traffic Lights <span class="count">(0)</span></h2>
+        <ul></ul>
+      </div>
+    </div>
+  </aside>
+  <main id="main">
+    <canvas id="canvas"></canvas>
+    <div id="hud">Scroll: zoom · Drag: pan · Click: inspect · F: fit</div>
+    <div id="info"></div>
+    <div id="drop-overlay">
+      Drop a CityFlow network JSON file here<br />
+      <small>or use "Open JSON…"</small>
+    </div>
+  </main>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const fileInput = document.getElementById('file-input');
+  const fileLabel = document.getElementById('file-label');
+  const dropOverlay = document.getElementById('drop-overlay');
+  const infoPanel = document.getElementById('info');
+  const hud = document.getElementById('hud');
+  const sidebar = document.getElementById('sidebar');
+
+  const state = {
+    net: null,
+    roadById: new Map(),
+    intById: new Map(),
+    // Camera in world coords: world point (x,y) -> screen = (x - cx) * scale + width/2 (with y flipped)
+    scale: 1,
+    cx: 0, cy: 0,
+    drag: null,
+    hover: null,        // {kind:'intersection'|'road', id}
+    selected: null,
+    toggles: {
+      roads: true, intersections: true, labels: false, arrows: true, virtual: true, tl: true
+    },
+    bounds: null,
+    // Map<intersectionId, {phaseIndex, playing, animId, phaseStartTs, paused}>
+    tl: new Map(),
+  };
+
+  // ---------- File loading ----------
+  function loadFromText(text, name) {
+    let json;
+    try { json = JSON.parse(text); }
+    catch (e) { alert('Failed to parse JSON: ' + e.message); return; }
+    if (!json.intersections || !json.roads) {
+      alert('This does not look like a CityFlow network file (missing "intersections" or "roads").');
+      return;
+    }
+    setNetwork(json, name);
+  }
+
+  fileInput.addEventListener('change', (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => loadFromText(r.result, f.name);
+    r.readAsText(f);
+  });
+
+  // drag-drop
+  ['dragenter', 'dragover'].forEach(ev => {
+    document.addEventListener(ev, (e) => {
+      e.preventDefault();
+      dropOverlay.classList.remove('hidden');
+      dropOverlay.classList.add('active');
+    });
+  });
+  ['dragleave', 'drop'].forEach(ev => {
+    document.addEventListener(ev, (e) => {
+      e.preventDefault();
+      dropOverlay.classList.remove('active');
+      if (state.net) dropOverlay.classList.add('hidden');
+    });
+  });
+  document.addEventListener('drop', (e) => {
+    const f = e.dataTransfer.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => loadFromText(r.result, f.name);
+    r.readAsText(f);
+  });
+
+  // ---------- Network setup ----------
+  function setNetwork(net, name) {
+    // Stop any previously running tl animation
+    state.tl.forEach(s => { if (s.animId) cancelAnimationFrame(s.animId); });
+    state.tl.clear();
+
+    state.net = net;
+    state.roadById.clear();
+    state.intById.clear();
+    net.intersections.forEach(i => state.intById.set(i.id, i));
+    net.roads.forEach(r => state.roadById.set(r.id, r));
+    computeBounds();
+    buildLists();
+    fitToView();
+    const tlCount = net.intersections.filter(hasPhases).length;
+    fileLabel.textContent = name + ' · ' + net.intersections.length + ' intersections · ' + net.roads.length + ' roads · ' + tlCount + ' signalized';
+    dropOverlay.classList.add('hidden');
+    state.selected = null;
+    hideInfo();
+    draw();
+  }
+
+  function hasPhases(it) {
+    return it && it.trafficLight && (it.trafficLight.lightphases || []).length > 0;
+  }
+
+  function tlState(intId) {
+    let s = state.tl.get(intId);
+    if (!s) {
+      s = { phaseIndex: 0, playing: false, animId: null, phaseStartTs: 0, elapsed: 0 };
+      state.tl.set(intId, s);
+    }
+    return s;
+  }
+
+  function computeBounds() {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    const add = (p) => {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    };
+    state.net.intersections.forEach(i => add(i.point));
+    state.net.roads.forEach(r => r.points.forEach(add));
+    state.bounds = { minX, maxX, minY, maxY };
+  }
+
+  // ---------- Coordinate transforms ----------
+  // World y is geographic (north positive). Screen y is down-positive. We flip y.
+  function w2s(x, y) {
+    const W = canvas.width, H = canvas.height;
+    return {
+      x: (x - state.cx) * state.scale + W / 2,
+      y: -(y - state.cy) * state.scale + H / 2,
+    };
+  }
+  function s2w(sx, sy) {
+    const W = canvas.width, H = canvas.height;
+    return {
+      x: (sx - W / 2) / state.scale + state.cx,
+      y: -(sy - H / 2) / state.scale + state.cy,
+    };
+  }
+
+  function fitToView() {
+    if (!state.bounds) return;
+    const b = state.bounds;
+    const W = canvas.width, H = canvas.height;
+    const padding = 60;
+    const dw = b.maxX - b.minX || 1;
+    const dh = b.maxY - b.minY || 1;
+    state.scale = Math.min((W - padding * 2) / dw, (H - padding * 2) / dh);
+    state.cx = (b.minX + b.maxX) / 2;
+    state.cy = (b.minY + b.maxY) / 2;
+  }
+
+  // ---------- Drawing ----------
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const r = canvas.getBoundingClientRect();
+    canvas.width = r.width * dpr;
+    canvas.height = r.height * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // We then re-multiply because our draw uses canvas.width/height in pixels:
+    // simpler: always work in CSS pixels
+    canvas.width = r.width;
+    canvas.height = r.height;
+    draw();
+  }
+  window.addEventListener('resize', resize);
+
+  function draw() {
+    ctx.fillStyle = '#14151a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (!state.net) return;
+
+    // Roads
+    if (state.toggles.roads) drawRoads();
+    // Traffic light visualization (under intersections so the marker stays clickable)
+    if (state.toggles.tl) drawTrafficLight();
+    // Intersections
+    if (state.toggles.intersections) drawIntersections();
+  }
+
+  // ---------- Traffic light drawing ----------
+  // Position of lane `idx` (0 = rightmost in driving direction) at world point `p`,
+  // given the road has `totalLanes` lanes each of width `laneWidth`. `dir` is the
+  // unit vector along the driving direction.
+  function laneOffsetPoint(p, dir, idx, totalLanes, laneWidth) {
+    // Perpendicular pointing to the right of the driving direction (world coords, y-up).
+    const perpR = { x: dir.y, y: -dir.x };
+    // Lane 0 center is at (totalLanes-1)/2 * w to the right of centerline.
+    const off = ((totalLanes - 1) / 2 - idx) * laneWidth;
+    return { x: p.x + perpR.x * off, y: p.y + perpR.y * off };
+  }
+
+  function unit(dx, dy) {
+    const m = Math.hypot(dx, dy) || 1;
+    return { x: dx / m, y: dy / m };
+  }
+
+  // For a road ending at intersection `it`, returns { point, dir } where point is the
+  // road's last polyline vertex (the intersection center) and dir is the unit
+  // vector pointing *into* the intersection (driving direction at the endpoint).
+  function incomingGeom(road) {
+    const pts = road.points;
+    const n = pts.length;
+    const a = pts[n - 2], b = pts[n - 1];
+    return { point: b, dir: unit(b.x - a.x, b.y - a.y) };
+  }
+
+  // For a road starting at intersection `it`: outgoing dir from intersection center.
+  function outgoingGeom(road) {
+    const pts = road.points;
+    const a = pts[0], b = pts[1];
+    return { point: a, dir: unit(b.x - a.x, b.y - a.y) };
+  }
+
+  function avgLaneWidth(road) {
+    if (!road.lanes || !road.lanes.length) return 3.5;
+    return road.lanes.reduce((s, l) => s + (l.width || 3.5), 0) / road.lanes.length;
+  }
+
+  function drawTrafficLight() {
+    if (!state.selected || state.selected.kind !== 'intersection') return;
+    const it = state.intById.get(state.selected.id);
+    if (!hasPhases(it)) return;
+    const s = tlState(it.id);
+    const ph = it.trafficLight.lightphases[s.phaseIndex];
+    if (!ph) return;
+    const activeSet = new Set(ph.availableRoadLinks || []);
+
+    // Draw inactive links faintly first, then active links on top.
+    (it.roadLinks || []).forEach((rl, idx) => {
+      if (!activeSet.has(idx)) drawRoadLink(it, rl, false);
+    });
+    (it.roadLinks || []).forEach((rl, idx) => {
+      if (activeSet.has(idx)) drawRoadLink(it, rl, true);
+    });
+  }
+
+  function drawRoadLink(it, rl, active) {
+    const startRoad = state.roadById.get(rl.startRoad);
+    const endRoad = state.roadById.get(rl.endRoad);
+    if (!startRoad || !endRoad) return;
+    const inG = incomingGeom(startRoad);
+    const outG = outgoingGeom(endRoad);
+    const startTotal = (startRoad.lanes || []).length;
+    const endTotal = (endRoad.lanes || []).length;
+    const startW = avgLaneWidth(startRoad);
+    const endW = avgLaneWidth(endRoad);
+    const center = it.point;
+
+    (rl.laneLinks || []).forEach(ll => {
+      // Pull back from intersection center by ~half intersection width so the
+      // line attaches to the lane "stop bar", not the center node.
+      const pullback = (it.width || 10) * 0.5;
+      const sStop = {
+        x: inG.point.x - inG.dir.x * pullback,
+        y: inG.point.y - inG.dir.y * pullback,
+      };
+      const eStart = {
+        x: outG.point.x + outG.dir.x * pullback,
+        y: outG.point.y + outG.dir.y * pullback,
+      };
+      const sLane = laneOffsetPoint(sStop, inG.dir, ll.startLaneIndex, startTotal, startW);
+      const eLane = laneOffsetPoint(eStart, outG.dir, ll.endLaneIndex, endTotal, endW);
+
+      // Convert to screen
+      const a = w2s(sLane.x, sLane.y);
+      const c = w2s(center.x, center.y);
+      const b = w2s(eLane.x, eLane.y);
+
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      if (active) {
+        ctx.strokeStyle = '#22c55e';
+        ctx.lineWidth = Math.max(2, 0.6 * Math.max(startW, endW) * state.scale);
+        ctx.globalAlpha = 0.95;
+      } else {
+        ctx.strokeStyle = '#7f1d1d';
+        ctx.lineWidth = Math.max(1, 0.35 * Math.max(startW, endW) * state.scale);
+        ctx.globalAlpha = 0.55;
+      }
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.quadraticCurveTo(c.x, c.y, b.x, b.y);
+      ctx.stroke();
+
+      // Arrowhead at end (active only — keep inactive uncluttered)
+      if (active) {
+        const dx = b.x - c.x, dy = b.y - c.y;
+        const ang = Math.atan2(dy, dx);
+        const sz = Math.max(6, 0.7 * endW * state.scale);
+        drawArrow(b.x, b.y, ang, sz);
+      }
+      ctx.globalAlpha = 1;
+    });
+  }
+
+  function roadWidthMeters(road) {
+    if (!road.lanes || !road.lanes.length) return 3.5;
+    return road.lanes.reduce((s, l) => s + (l.width || 3.5), 0);
+  }
+
+  function drawRoads() {
+    const net = state.net;
+    for (const road of net.roads) {
+      drawRoad(road);
+    }
+    // Selected/hover on top
+    if (state.hover && state.hover.kind === 'road') {
+      const r = state.roadById.get(state.hover.id);
+      if (r) drawRoad(r, { outline: '#ef4444' });
+    }
+    if (state.selected && state.selected.kind === 'road') {
+      const r = state.roadById.get(state.selected.id);
+      if (r) drawRoad(r, { outline: '#22c55e' });
+    }
+  }
+
+  function drawRoad(road, opts = {}) {
+    if (!road.points || road.points.length < 2) return;
+    const pts = road.points.map(p => w2s(p.x, p.y));
+    const widthPx = Math.max(2, roadWidthMeters(road) * state.scale);
+
+    ctx.lineCap = 'butt';
+    ctx.lineJoin = 'round';
+
+    // Edge / outline
+    ctx.strokeStyle = opts.outline || '#2c2f37';
+    ctx.lineWidth = widthPx + (opts.outline ? 4 : 2);
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke();
+
+    // Fill
+    ctx.strokeStyle = '#6b7280';
+    ctx.lineWidth = widthPx;
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke();
+
+    // Lane dividers (white dashed) if scale is high enough
+    if (widthPx > 8 && road.lanes && road.lanes.length > 1) {
+      // Draw dashed center stripe
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([6, 6]);
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Direction arrow at midpoint
+    if (state.toggles.arrows && widthPx > 4) {
+      const mid = midpointOf(pts);
+      drawArrow(mid.x, mid.y, mid.angle, Math.max(6, widthPx * 0.5));
+    }
+
+    // Label
+    if (state.toggles.labels && pts.length >= 2) {
+      const mid = midpointOf(pts);
+      ctx.fillStyle = '#cbd5e1';
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(road.id, mid.x, mid.y - widthPx / 2 - 6);
+    }
+  }
+
+  function midpointOf(pts) {
+    // Find midpoint along polyline by length
+    let total = 0;
+    const seg = [];
+    for (let i = 1; i < pts.length; i++) {
+      const dx = pts[i].x - pts[i-1].x, dy = pts[i].y - pts[i-1].y;
+      const len = Math.hypot(dx, dy);
+      seg.push(len);
+      total += len;
+    }
+    let target = total / 2;
+    for (let i = 1; i < pts.length; i++) {
+      if (target <= seg[i-1]) {
+        const t = seg[i-1] ? target / seg[i-1] : 0;
+        const dx = pts[i].x - pts[i-1].x, dy = pts[i].y - pts[i-1].y;
+        return {
+          x: pts[i-1].x + dx * t,
+          y: pts[i-1].y + dy * t,
+          angle: Math.atan2(dy, dx),
+        };
+      }
+      target -= seg[i-1];
+    }
+    return { x: pts[0].x, y: pts[0].y, angle: 0 };
+  }
+
+  function drawArrow(x, y, angle, size) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.beginPath();
+    ctx.moveTo(size * 0.6, 0);
+    ctx.lineTo(-size * 0.4, -size * 0.4);
+    ctx.lineTo(-size * 0.2, 0);
+    ctx.lineTo(-size * 0.4, size * 0.4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawIntersections() {
+    for (const it of state.net.intersections) {
+      if (it.virtual && !state.toggles.virtual) continue;
+      drawIntersection(it);
+    }
+    if (state.hover && state.hover.kind === 'intersection') {
+      const it = state.intById.get(state.hover.id);
+      if (it) drawIntersection(it, { outline: '#ef4444' });
+    }
+    if (state.selected && state.selected.kind === 'intersection') {
+      const it = state.intById.get(state.selected.id);
+      if (it) drawIntersection(it, { outline: '#22c55e' });
+    }
+  }
+
+  function drawIntersection(it, opts = {}) {
+    const p = w2s(it.point.x, it.point.y);
+    const r = Math.max(it.virtual ? 3 : 5, (it.width || 10) * state.scale * 0.5);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = it.virtual ? '#5b8def' : '#f59e0b';
+    ctx.fill();
+    ctx.lineWidth = opts.outline ? 3 : 1;
+    ctx.strokeStyle = opts.outline || '#000';
+    ctx.stroke();
+
+    if (state.toggles.labels) {
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(it.id, p.x, p.y - r - 2);
+    }
+  }
+
+  // ---------- Hit testing ----------
+  function hitTest(sx, sy) {
+    // Try intersections first (small targets)
+    for (const it of state.net.intersections) {
+      if (it.virtual && !state.toggles.virtual) continue;
+      const p = w2s(it.point.x, it.point.y);
+      const r = Math.max(it.virtual ? 4 : 6, (it.width || 10) * state.scale * 0.5);
+      if (Math.hypot(sx - p.x, sy - p.y) <= r + 2) {
+        return { kind: 'intersection', id: it.id };
+      }
+    }
+    if (!state.toggles.roads) return null;
+    // Then roads (distance to polyline)
+    for (const road of state.net.roads) {
+      const pts = road.points.map(p => w2s(p.x, p.y));
+      const widthPx = Math.max(2, roadWidthMeters(road) * state.scale);
+      const tol = widthPx / 2 + 2;
+      for (let i = 1; i < pts.length; i++) {
+        if (pointToSeg(sx, sy, pts[i-1], pts[i]) <= tol) {
+          return { kind: 'road', id: road.id };
+        }
+      }
+    }
+    return null;
+  }
+
+  function pointToSeg(px, py, a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len2 = dx*dx + dy*dy;
+    if (!len2) return Math.hypot(px - a.x, py - a.y);
+    let t = ((px - a.x) * dx + (py - a.y) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (a.x + t*dx), py - (a.y + t*dy));
+  }
+
+  // ---------- Interaction ----------
+  canvas.addEventListener('mousedown', (e) => {
+    state.drag = { x: e.clientX, y: e.clientY, cx: state.cx, cy: state.cy, moved: false };
+    canvas.classList.add('dragging');
+  });
+  window.addEventListener('mouseup', (e) => {
+    if (state.drag && !state.drag.moved) {
+      // click
+      const rect = canvas.getBoundingClientRect();
+      const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+      if (sx >= 0 && sy >= 0 && sx < rect.width && sy < rect.height && state.net) {
+        const hit = hitTest(sx, sy);
+        if (hit) {
+          selectItem(hit, false);
+        } else {
+          state.selected = null;
+          hideInfo();
+          updateListSelection();
+          draw();
+        }
+      }
+    }
+    state.drag = null;
+    canvas.classList.remove('dragging');
+  });
+  window.addEventListener('mousemove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+    if (state.drag) {
+      const dx = e.clientX - state.drag.x;
+      const dy = e.clientY - state.drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) state.drag.moved = true;
+      state.cx = state.drag.cx - dx / state.scale;
+      state.cy = state.drag.cy + dy / state.scale;
+      draw();
+      return;
+    }
+    if (!state.net) return;
+    if (sx < 0 || sy < 0 || sx >= rect.width || sy >= rect.height) {
+      if (state.hover) { state.hover = null; draw(); }
+      return;
+    }
+    const hit = hitTest(sx, sy);
+    const changed = JSON.stringify(hit) !== JSON.stringify(state.hover);
+    state.hover = hit;
+    canvas.style.cursor = hit ? 'pointer' : (state.drag ? 'grabbing' : 'grab');
+    if (changed) {
+      draw();
+      if (hit) {
+        const w = s2w(sx, sy);
+        hud.textContent = `${hit.kind}: ${hit.id}  ·  world: (${w.x.toFixed(1)}, ${w.y.toFixed(1)})  ·  zoom: ${state.scale.toFixed(3)}`;
+      } else {
+        const w = s2w(sx, sy);
+        hud.textContent = `world: (${w.x.toFixed(1)}, ${w.y.toFixed(1)})  ·  zoom: ${state.scale.toFixed(3)}`;
+      }
+    }
+  });
+
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    if (!state.net) return;
+    const rect = canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+    const before = s2w(sx, sy);
+    const factor = Math.exp(-e.deltaY * 0.0015);
+    state.scale *= factor;
+    state.scale = Math.max(1e-6, Math.min(state.scale, 1e6));
+    const after = s2w(sx, sy);
+    state.cx += before.x - after.x;
+    state.cy += before.y - after.y;
+    draw();
+  }, { passive: false });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT') return;
+    if (e.key === 'f' || e.key === 'F') { fitToView(); draw(); }
+    else if (e.key === 'Escape') {
+      state.selected = null; hideInfo(); updateListSelection(); draw();
+    }
+  });
+
+  // ---------- Sidebar ----------
+  function buildLists() {
+    const sections = sidebar.querySelectorAll('.list-section');
+    sections.forEach(sec => {
+      const kind = sec.dataset.kind;
+      let items;
+      if (kind === 'intersection') items = state.net.intersections;
+      else if (kind === 'road') items = state.net.roads;
+      else if (kind === 'trafficLight') items = state.net.intersections.filter(hasPhases);
+      const ul = sec.querySelector('ul');
+      sec.querySelector('.count').textContent = '(' + items.length + ')';
+      const sorted = items.slice().sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
+      // Traffic Lights entries select the underlying intersection
+      const selKind = kind === 'trafficLight' ? 'intersection' : kind;
+      ul.innerHTML = sorted.map(it => {
+        let meta = '';
+        if (kind === 'intersection') meta = it.virtual ? 'virtual' : ((it.roads || []).length + ' roads');
+        else if (kind === 'road') meta = (it.lanes ? it.lanes.length + ' lanes' : '');
+        else if (kind === 'trafficLight') {
+          const n = it.trafficLight.lightphases.length;
+          const total = it.trafficLight.lightphases.reduce((s, p) => s + (p.time || 0), 0);
+          meta = n + ' phases · ' + total.toFixed(0) + 's';
+        }
+        return `<li data-id="${it.id}" data-kind="${selKind}"><span>${it.id}</span><span class="meta">${meta}</span></li>`;
+      }).join('');
+      ul.querySelectorAll('li').forEach(li => {
+        li.addEventListener('click', () => {
+          selectItem({ kind: li.dataset.kind, id: li.dataset.id }, true);
+        });
+      });
+    });
+    sidebar.querySelectorAll('.list-section h2').forEach(h => {
+      h.addEventListener('click', () => {
+        const ul = h.nextElementSibling;
+        ul.style.display = ul.style.display === 'none' ? '' : 'none';
+      });
+    });
+  }
+
+  function updateListSelection() {
+    sidebar.querySelectorAll('.list-section li').forEach(li => {
+      li.classList.remove('selected');
+    });
+    if (state.selected) {
+      const sec = sidebar.querySelector(`.list-section[data-kind="${state.selected.kind}"]`);
+      if (sec) {
+        const li = sec.querySelector(`li[data-id="${CSS.escape(state.selected.id)}"]`);
+        if (li) {
+          li.classList.add('selected');
+          li.scrollIntoView({ block: 'nearest' });
+        }
+      }
+    }
+  }
+
+  function selectItem(target, recenter) {
+    // Stop playback on any other intersection; keep target's running if it was.
+    state.tl.forEach((s, id) => { if (id !== target.id) stopPlayback(s); });
+    state.selected = target;
+    updateListSelection();
+    showInfo(target);
+    if (recenter) {
+      const c = centerOf(target);
+      if (c) {
+        state.cx = c.x;
+        state.cy = c.y;
+        // Don't auto-zoom — preserve user's level
+      }
+    }
+    draw();
+  }
+
+  function centerOf(target) {
+    if (target.kind === 'intersection') {
+      const it = state.intById.get(target.id);
+      return it ? { x: it.point.x, y: it.point.y } : null;
+    } else {
+      const r = state.roadById.get(target.id);
+      if (!r || !r.points.length) return null;
+      let sx = 0, sy = 0;
+      r.points.forEach(p => { sx += p.x; sy += p.y; });
+      return { x: sx / r.points.length, y: sy / r.points.length };
+    }
+  }
+
+  // ---------- Info panel ----------
+  function hideInfo() {
+    state.tl.forEach(stopPlayback);
+    infoPanel.classList.remove('show');
+    infoPanel.innerHTML = '';
+  }
+
+  function pill(label, kind, id) {
+    return `<span class="pill" data-kind="${kind}" data-id="${id}">${label}</span>`;
+  }
+
+  function showInfo(target) {
+    let html = '';
+    if (target.kind === 'intersection') {
+      const it = state.intById.get(target.id);
+      if (!it) return;
+      const roadPills = (it.roads || []).map(rid => pill(rid, 'road', rid)).join(' ');
+      const links = (it.roadLinks || []).map((rl, i) => {
+        const ll = (rl.laneLinks || []).length;
+        return `<div style="margin:3px 0">${i}: ${rl.type} ${pill(rl.startRoad, 'road', rl.startRoad)}→${pill(rl.endRoad, 'road', rl.endRoad)} <span style="color:var(--muted)">(${ll} lane links)</span></div>`;
+      }).join('');
+      const phases = (it.trafficLight && it.trafficLight.lightphases) ? it.trafficLight.lightphases.length : 0;
+      const tlBlock = hasPhases(it) ? renderTLBlock(it) : '';
+      html = `
+        <h3>Intersection ${it.id} <span class="close" id="close-info">&times;</span></h3>
+        <dl>
+          <dt>Type</dt><dd>${it.virtual ? 'virtual' : 'real'}</dd>
+          <dt>Position</dt><dd>(${it.point.x.toFixed(2)}, ${it.point.y.toFixed(2)})</dd>
+          <dt>Width</dt><dd>${it.width ?? '-'}</dd>
+          <dt>Roads</dt><dd>${roadPills || '—'}</dd>
+          <dt>Phases</dt><dd>${phases}</dd>
+        </dl>
+        ${tlBlock}
+        ${links ? `<div style="margin-top:8px;color:var(--muted);font-size:11px">Road links</div>${links}` : ''}
+      `;
+    } else {
+      const r = state.roadById.get(target.id);
+      if (!r) return;
+      const len = polyLength(r.points);
+      const totalW = roadWidthMeters(r);
+      const lanes = (r.lanes || []).map((l, i) =>
+        `<div>lane ${i}: w=${l.width?.toFixed(2)} max=${l.maxSpeed?.toFixed(2)} m/s</div>`).join('');
+      html = `
+        <h3>Road ${r.id} <span class="close" id="close-info">&times;</span></h3>
+        <dl>
+          <dt>From</dt><dd>${pill(r.startIntersection, 'intersection', r.startIntersection)}</dd>
+          <dt>To</dt><dd>${pill(r.endIntersection, 'intersection', r.endIntersection)}</dd>
+          <dt>Length</dt><dd>${len.toFixed(2)} m</dd>
+          <dt>Lanes</dt><dd>${(r.lanes || []).length} (total ${totalW.toFixed(2)} m)</dd>
+          <dt>Points</dt><dd>${r.points.length}</dd>
+        </dl>
+        ${lanes ? `<div style="margin-top:8px;color:var(--muted);font-size:11px">Lanes</div>${lanes}` : ''}
+      `;
+    }
+    infoPanel.innerHTML = html;
+    infoPanel.classList.add('show');
+    infoPanel.querySelector('#close-info')?.addEventListener('click', () => {
+      state.selected = null; hideInfo(); updateListSelection(); draw();
+    });
+    infoPanel.querySelectorAll('.pill').forEach(p => {
+      p.addEventListener('click', () => {
+        selectItem({ kind: p.dataset.kind, id: p.dataset.id }, true);
+      });
+    });
+    wireTLControls(target);
+  }
+
+  function renderTLBlock(it) {
+    const s = tlState(it.id);
+    const phases = it.trafficLight.lightphases;
+    const options = phases.map((p, i) =>
+      `<option value="${i}" ${i === s.phaseIndex ? 'selected' : ''}>Phase ${i} — ${p.time}s · ${(p.availableRoadLinks || []).length} link(s)</option>`
+    ).join('');
+    return `
+      <div class="tl-block" id="tl-block">
+        <div class="label">Traffic-light phase</div>
+        <select id="tl-select">${options}</select>
+        <div class="tl-controls">
+          <button id="tl-prev">‹ Prev</button>
+          <button id="tl-play">${s.playing ? '❚❚ Pause' : '▶ Play'}</button>
+          <button id="tl-next">Next ›</button>
+        </div>
+        <div class="tl-active" id="tl-active">${renderActiveLinks(it, s.phaseIndex)}</div>
+      </div>
+    `;
+  }
+
+  function renderActiveLinks(it, phaseIdx) {
+    const ph = it.trafficLight.lightphases[phaseIdx];
+    if (!ph) return '';
+    const active = ph.availableRoadLinks || [];
+    if (!active.length) return '<span style="color:#ef4444">All red</span>';
+    return active.map(i => {
+      const rl = it.roadLinks[i];
+      if (!rl) return '';
+      return `<span class="tag">${i}: ${rl.type} ${rl.startRoad}→${rl.endRoad}</span>`;
+    }).join('');
+  }
+
+  function wireTLControls(target) {
+    if (target.kind !== 'intersection') return;
+    const it = state.intById.get(target.id);
+    if (!hasPhases(it)) return;
+    const s = tlState(it.id);
+    const sel = document.getElementById('tl-select');
+    const prev = document.getElementById('tl-prev');
+    const next = document.getElementById('tl-next');
+    const play = document.getElementById('tl-play');
+    const setPhase = (i) => {
+      const n = it.trafficLight.lightphases.length;
+      s.phaseIndex = ((i % n) + n) % n;
+      s.phaseStartTs = performance.now();
+      if (sel) sel.value = s.phaseIndex;
+      const act = document.getElementById('tl-active');
+      if (act) act.innerHTML = renderActiveLinks(it, s.phaseIndex);
+      draw();
+    };
+    sel?.addEventListener('change', () => { stopPlayback(s); play.textContent = '▶ Play'; setPhase(parseInt(sel.value, 10)); });
+    prev?.addEventListener('click', () => { stopPlayback(s); play.textContent = '▶ Play'; setPhase(s.phaseIndex - 1); });
+    next?.addEventListener('click', () => { stopPlayback(s); play.textContent = '▶ Play'; setPhase(s.phaseIndex + 1); });
+    play?.addEventListener('click', () => {
+      if (s.playing) { stopPlayback(s); play.textContent = '▶ Play'; }
+      else { startPlayback(it, s, setPhase); play.textContent = '❚❚ Pause'; }
+    });
+  }
+
+  function startPlayback(it, s, setPhase) {
+    s.playing = true;
+    s.phaseStartTs = performance.now();
+    const tick = (ts) => {
+      if (!s.playing) return;
+      // If the user navigated away to a different intersection, just keep cycling
+      // (we still want the visualization while it's selected).
+      const ph = it.trafficLight.lightphases[s.phaseIndex];
+      const dur = Math.max(0.1, ph.time || 1) * 1000;
+      if (ts - s.phaseStartTs >= dur) {
+        const n = it.trafficLight.lightphases.length;
+        const next = (s.phaseIndex + 1) % n;
+        setPhase(next);
+      }
+      s.animId = requestAnimationFrame(tick);
+    };
+    s.animId = requestAnimationFrame(tick);
+  }
+
+  function stopPlayback(s) {
+    s.playing = false;
+    if (s.animId) { cancelAnimationFrame(s.animId); s.animId = null; }
+  }
+
+  function polyLength(pts) {
+    let total = 0;
+    for (let i = 1; i < pts.length; i++) {
+      total += Math.hypot(pts[i].x - pts[i-1].x, pts[i].y - pts[i-1].y);
+    }
+    return total;
+  }
+
+  // ---------- Controls ----------
+  document.getElementById('fit-btn').addEventListener('click', () => { fitToView(); draw(); });
+  document.getElementById('reset-btn').addEventListener('click', () => {
+    state.selected = null; hideInfo(); updateListSelection(); draw();
+  });
+  ['roads', 'intersections', 'labels', 'arrows', 'virtual', 'tl'].forEach(k => {
+    document.getElementById('t-' + k).addEventListener('change', (e) => {
+      state.toggles[k] = e.target.checked;
+      draw();
+    });
+  });
+
+  // ---------- Init ----------
+  resize();
+})();
+</script>
+</body>
+</html>
