@@ -6,12 +6,17 @@ def build_lane_links(row):
     end_ib = int(row["end_ib_lane"])
     start_ob = int(row["start_ob_lane"])
     end_ob = int(row["end_ob_lane"])
+    ib_total = int(row["ib_total_lanes"])
+    ob_total = int(row["ob_total_lanes"])
 
+    # GMNS numbers lanes 1..N where 1 is the leftmost (innermost, closest
+    # to centerline) in the driving direction. CityFlow and SUMO both use
+    # 0..N-1 with 0 as the rightmost (curb-side). Invert.
     for ib_lane in range(start_ib, end_ib + 1):
         for ob_lane in range(start_ob, end_ob + 1):
             lane_links.append({
-                "startLaneIndex": ib_lane - 1,  # 0-based
-                "endLaneIndex": ob_lane - 1,    # 0-based
+                "startLaneIndex": ib_total - ib_lane,
+                "endLaneIndex": ob_total - ob_lane,
                 "points": []
             })
 
@@ -40,6 +45,11 @@ def build_turn_movements_by_node(
     # map inbound and outbound link IDs to road IDs
     movement_df["ib_road_id"] = movement_df["ib_link_id"].map(link_to_road_map)
     movement_df["ob_road_id"] = movement_df["ob_link_id"].map(link_to_road_map)
+
+    # carry vehicle-lane totals for each link so build_lane_links can invert
+    # GMNS lane numbering (1 = leftmost) to CityFlow/SUMO (0 = rightmost).
+    movement_df["ib_total_lanes"] = movement_df["ib_link_id"].map(link_to_lanenums)
+    movement_df["ob_total_lanes"] = movement_df["ob_link_id"].map(link_to_lanenums)
 
     # get rid of car-less movements
     movement_df = movement_df[

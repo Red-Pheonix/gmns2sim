@@ -1,4 +1,5 @@
 import argparse
+from pathlib import Path
 
 
 def parse_args():
@@ -15,21 +16,22 @@ def parse_args():
     parser.add_argument(
         "output",
         help=(
-            "For cityflow: path to the output JSON file. "
-            "For sumo: path to the output directory (will be created)."
+            "Path to the output directory (will be created if it doesn't "
+            "exist). For cityflow this is where <basename>.json is written; "
+            "for sumo it holds the .nod/.edg/.con/.tll/.net.xml set."
         ),
+    )
+    parser.add_argument(
+        "--basename",
+        default=None,
+        help="Basename for the generated file(s). Defaults to the input "
+             "folder name (lowercased).",
     )
     parser.add_argument(
         "--indent",
         type=int,
         default=4,
         help="(cityflow only) JSON indentation level. Defaults to 4.",
-    )
-    parser.add_argument(
-        "--basename",
-        default=None,
-        help="(sumo only) Basename for the generated .nod/.edg/.con/.tll/.net files. "
-             "Defaults to the input folder name (lowercased).",
     )
     parser.add_argument(
         "--no-netconvert",
@@ -42,6 +44,9 @@ def parse_args():
 def main():
     args = parse_args()
 
+    basename = args.basename or Path(args.input).name.lower()
+    output_dir = Path(args.output)
+
     if args.format == "cityflow":
         try:
             from converter import CityFlowConverter
@@ -49,8 +54,12 @@ def main():
             if exc.name == "gmnspy":
                 raise SystemExit("Missing required dependency: gmnspy") from exc
             raise
-        output_path = CityFlowConverter(args.input).write(args.output, indent=args.indent)
-        print(f"Wrote CityFlow network to {output_path}")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = CityFlowConverter(args.input).write(
+            output_dir / f"{basename}.json",
+            indent=args.indent,
+        )
+        print(f"  cityflow     {output_path}")
     else:
         try:
             from converter import SumoConverter
@@ -59,8 +68,8 @@ def main():
                 raise SystemExit("Missing required dependency: gmnspy") from exc
             raise
         paths = SumoConverter(args.input).write(
-            args.output,
-            basename=args.basename,
+            output_dir,
+            basename=basename,
             run_netconvert=not args.no_netconvert,
         )
         for kind, p in paths.items():
