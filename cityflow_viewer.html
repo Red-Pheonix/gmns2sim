@@ -229,6 +229,7 @@
         <label class="toggle"><input type="checkbox" id="t-arrows" checked /> Direction</label>
         <label class="toggle"><input type="checkbox" id="t-virtual" checked /> Virtual</label>
         <label class="toggle"><input type="checkbox" id="t-tl" checked /> Traffic light</label>
+        <label class="toggle"><input type="checkbox" id="t-tlConnections" /> Connections</label>
       </div>
       <div class="legend">
         <span><span class="sw" style="background:#f59e0b"></span>Intersection</span>
@@ -284,7 +285,8 @@
     hover: null,        // {kind:'intersection'|'road', id}
     selected: null,
     toggles: {
-      roads: true, intersections: true, labels: false, arrows: true, virtual: true, tl: true
+      roads: true, intersections: true, labels: false, arrows: true,
+      virtual: true, tl: true, tlConnections: false,
     },
     bounds: null,
     // Map<intersectionId, {phaseIndex, playing, animId, phaseStartTs, paused}>
@@ -433,10 +435,10 @@
 
     // Roads
     if (state.toggles.roads) drawRoads();
-    // Traffic light visualization (under intersections so the marker stays clickable)
-    if (state.toggles.tl) drawTrafficLight();
-    // Intersections
+    // Intersections under the traffic-light layer so signal heads + connection
+    // curves render on top (hit testing is order-independent — see hitTest).
     if (state.toggles.intersections) drawIntersections();
+    if (state.toggles.tl) drawTrafficLight();
   }
 
   // ---------- Traffic light drawing ----------
@@ -457,10 +459,11 @@
   }
 
   // For a road ending at intersection `it`, returns { point, dir } where point is the
-  // road's last polyline vertex (the intersection center) and dir is the unit
-  // vector pointing *into* the intersection (driving direction at the endpoint).
+  // road's last polyline vertex and dir is the unit vector pointing *into* the
+  // intersection (driving direction at the endpoint). We use the OFFSET points
+  // so the connection geometry matches the visually drawn road.
   function incomingGeom(road) {
-    const pts = road.points;
+    const pts = roadDrawPoints(road);
     const n = pts.length;
     const a = pts[n - 2], b = pts[n - 1];
     return { point: b, dir: unit(b.x - a.x, b.y - a.y) };
@@ -468,7 +471,7 @@
 
   // For a road starting at intersection `it`: outgoing dir from intersection center.
   function outgoingGeom(road) {
-    const pts = road.points;
+    const pts = roadDrawPoints(road);
     const a = pts[0], b = pts[1];
     return { point: a, dir: unit(b.x - a.x, b.y - a.y) };
   }
@@ -487,7 +490,14 @@
     if (!ph) return;
     const activeSet = new Set(ph.availableRoadLinks || []);
 
-    // Draw inactive links faintly first, then active links on top.
+    // Connection curves first (under signal heads), only for active links.
+    if (state.toggles.tlConnections) {
+      (it.roadLinks || []).forEach((rl, idx) => {
+        if (activeSet.has(idx)) drawRoadLinkCurve(it, rl);
+      });
+    }
+
+    // Stop-bar signal heads on top.
     (it.roadLinks || []).forEach((rl, idx) => {
       if (!activeSet.has(idx)) drawRoadLink(it, rl, false);
     });
@@ -496,7 +506,7 @@
     });
   }
 
-  function drawRoadLink(it, rl, active) {
+  function drawRoadLinkCurve(it, rl) {
     const startRoad = state.roadById.get(rl.startRoad);
     const endRoad = state.roadById.get(rl.endRoad);
     if (!startRoad || !endRoad) return;
@@ -507,57 +517,128 @@
     const startW = avgLaneWidth(startRoad);
     const endW = avgLaneWidth(endRoad);
     const center = it.point;
+    const pullback = (it.width || 10) * 0.7;
+    const sStop = {
+      x: inG.point.x - inG.dir.x * pullback,
+      y: inG.point.y - inG.dir.y * pullback,
+    };
+    const eStart = {
+      x: outG.point.x + outG.dir.x * pullback,
+      y: outG.point.y + outG.dir.y * pullback,
+    };
 
-    (rl.laneLinks || []).forEach(ll => {
-      // Pull back from intersection center by ~half intersection width so the
-      // line attaches to the lane "stop bar", not the center node.
-      const pullback = (it.width || 10) * 0.5;
-      const sStop = {
-        x: inG.point.x - inG.dir.x * pullback,
-        y: inG.point.y - inG.dir.y * pullback,
-      };
-      const eStart = {
-        x: outG.point.x + outG.dir.x * pullback,
-        y: outG.point.y + outG.dir.y * pullback,
-      };
+    for (const ll of (rl.laneLinks || [])) {
       const sLane = laneOffsetPoint(sStop, inG.dir, ll.startLaneIndex, startTotal, startW);
       const eLane = laneOffsetPoint(eStart, outG.dir, ll.endLaneIndex, endTotal, endW);
-
-      // Convert to screen
       const a = w2s(sLane.x, sLane.y);
       const c = w2s(center.x, center.y);
       const b = w2s(eLane.x, eLane.y);
 
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      if (active) {
-        ctx.strokeStyle = '#22c55e';
-        ctx.lineWidth = Math.max(2, 0.6 * Math.max(startW, endW) * state.scale);
-        ctx.globalAlpha = 0.95;
-      } else {
-        ctx.strokeStyle = '#7f1d1d';
-        ctx.lineWidth = Math.max(1, 0.35 * Math.max(startW, endW) * state.scale);
-        ctx.globalAlpha = 0.55;
-      }
+      ctx.strokeStyle = '#22c55e';
+      ctx.lineWidth = Math.max(2, 0.45 * Math.max(startW, endW) * state.scale);
+      ctx.globalAlpha = 0.85;
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.quadraticCurveTo(c.x, c.y, b.x, b.y);
       ctx.stroke();
 
-      // Arrowhead at end (active only — keep inactive uncluttered)
-      if (active) {
-        const dx = b.x - c.x, dy = b.y - c.y;
-        const ang = Math.atan2(dy, dx);
-        const sz = Math.max(6, 0.7 * endW * state.scale);
-        drawArrow(b.x, b.y, ang, sz);
-      }
+      const dx = b.x - c.x, dy = b.y - c.y;
+      drawArrow(b.x, b.y, Math.atan2(dy, dx), Math.max(6, 0.7 * endW * state.scale));
       ctx.globalAlpha = 1;
-    });
+    }
+  }
+
+  function drawRoadLink(it, rl, active) {
+    const startRoad = state.roadById.get(rl.startRoad);
+    if (!startRoad) return;
+    const inG = incomingGeom(startRoad);
+    const startTotal = (startRoad.lanes || []).length;
+    const startW = avgLaneWidth(startRoad);
+
+    // Stop bar = pull back from intersection along incoming direction.
+    // 0.7 × width leaves visible breathing room between the intersection
+    // marker (drawn at radius ≈ 0.5 × width) and the signal heads.
+    const pullback = (it.width || 10) * 0.7;
+    const sStop = {
+      x: inG.point.x - inG.dir.x * pullback,
+      y: inG.point.y - inG.dir.y * pullback,
+    };
+
+    // One signal head per unique start lane in this movement (a movement
+    // may have several laneLinks fanning into different end lanes — they
+    // all share the same upstream stop-bar position).
+    const seenLanes = new Set();
+    for (const ll of (rl.laneLinks || [])) {
+      if (seenLanes.has(ll.startLaneIndex)) continue;
+      seenLanes.add(ll.startLaneIndex);
+      const sLane = laneOffsetPoint(sStop, inG.dir, ll.startLaneIndex, startTotal, startW);
+      drawSignalHead(sLane, inG.dir, startW, active);
+    }
+  }
+
+  function drawSignalHead(worldPos, dir, laneWidth, active) {
+    const p = w2s(worldPos.x, worldPos.y);
+    // World dir is y-up; screen y is flipped → negate dy when computing angle.
+    const angle = Math.atan2(-dir.y, dir.x);
+    const lenAlong = Math.max(3, 0.30 * laneWidth * state.scale);
+    const lenAcross = Math.max(6, 0.85 * laneWidth * state.scale);
+
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(angle);
+    ctx.fillStyle = active ? '#22c55e' : '#ef4444';
+    ctx.globalAlpha = active ? 1 : 0.85;
+    ctx.fillRect(-lenAlong / 2, -lenAcross / 2, lenAlong, lenAcross);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+    ctx.strokeRect(-lenAlong / 2, -lenAcross / 2, lenAlong, lenAcross);
+    ctx.globalAlpha = 1;
+    ctx.restore();
   }
 
   function roadWidthMeters(road) {
     if (!road.lanes || !road.lanes.length) return 3.5;
     return road.lanes.reduce((s, l) => s + (l.width || 3.5), 0);
+  }
+
+  // CityFlow stores opposing roads (e.g. 2_6 and 6_2) with identical centerlines.
+  // Drawing them as-is overlaps them perfectly. Shift each road perpendicular to
+  // the right of its driving direction by half its width so the two opposing
+  // roads sit side-by-side with their left edges meeting on the original
+  // centerline (driving-on-the-right convention).
+  function offsetPolyline(pts, distance) {
+    if (pts.length < 2 || !distance) return pts.map(p => ({ x: p.x, y: p.y }));
+    // Right-of-direction perpendicular in y-up world coords: (dy, -dx).
+    const segPerp = (a, b) => {
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const m = Math.hypot(dx, dy) || 1;
+      return { x: dy / m, y: -dx / m };
+    };
+    const out = [];
+    for (let i = 0; i < pts.length; i++) {
+      let perp;
+      if (i === 0)                 perp = segPerp(pts[0], pts[1]);
+      else if (i === pts.length-1) perp = segPerp(pts[i-1], pts[i]);
+      else {
+        // Average adjacent segment perpendiculars at interior joins.
+        const p1 = segPerp(pts[i-1], pts[i]);
+        const p2 = segPerp(pts[i], pts[i+1]);
+        const ax = (p1.x + p2.x) / 2, ay = (p1.y + p2.y) / 2;
+        const m = Math.hypot(ax, ay) || 1;
+        perp = { x: ax / m, y: ay / m };
+      }
+      out.push({ x: pts[i].x + perp.x * distance, y: pts[i].y + perp.y * distance });
+    }
+    return out;
+  }
+
+  // Get a road's polyline in world coords shifted by half its width to the
+  // right. Used by drawing, hit-testing, and traffic-light lane geometry so
+  // they all share the same visual placement.
+  function roadDrawPoints(road) {
+    return offsetPolyline(road.points, roadWidthMeters(road) / 2);
   }
 
   function drawRoads() {
@@ -578,7 +659,7 @@
 
   function drawRoad(road, opts = {}) {
     if (!road.points || road.points.length < 2) return;
-    const pts = road.points.map(p => w2s(p.x, p.y));
+    const pts = roadDrawPoints(road).map(p => w2s(p.x, p.y));
     const widthPx = Math.max(2, roadWidthMeters(road) * state.scale);
 
     ctx.lineCap = 'butt';
@@ -720,7 +801,7 @@
     if (!state.toggles.roads) return null;
     // Then roads (distance to polyline)
     for (const road of state.net.roads) {
-      const pts = road.points.map(p => w2s(p.x, p.y));
+      const pts = roadDrawPoints(road).map(p => w2s(p.x, p.y));
       const widthPx = Math.max(2, roadWidthMeters(road) * state.scale);
       const tol = widthPx / 2 + 2;
       for (let i = 1; i < pts.length; i++) {
@@ -901,9 +982,10 @@
     } else {
       const r = state.roadById.get(target.id);
       if (!r || !r.points.length) return null;
+      const pts = roadDrawPoints(r);
       let sx = 0, sy = 0;
-      r.points.forEach(p => { sx += p.x; sy += p.y; });
-      return { x: sx / r.points.length, y: sy / r.points.length };
+      pts.forEach(p => { sx += p.x; sy += p.y; });
+      return { x: sx / pts.length, y: sy / pts.length };
     }
   }
 
@@ -1070,7 +1152,7 @@
   document.getElementById('reset-btn').addEventListener('click', () => {
     state.selected = null; hideInfo(); updateListSelection(); draw();
   });
-  ['roads', 'intersections', 'labels', 'arrows', 'virtual', 'tl'].forEach(k => {
+  ['roads', 'intersections', 'labels', 'arrows', 'virtual', 'tl', 'tlConnections'].forEach(k => {
     document.getElementById('t-' + k).addEventListener('change', (e) => {
       state.toggles[k] = e.target.checked;
       draw();

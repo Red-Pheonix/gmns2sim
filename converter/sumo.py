@@ -146,8 +146,72 @@ class SumoConverter:
         if run_netconvert:
             paths["net"] = output_dir / f"{basename}.net.xml"
             self._run_netconvert(paths)
+            # netconvert reorders and re-packs linkIndex regardless of what
+            # we declared in .con.xml, so our state strings reference the
+            # wrong connections. Rewrite tlLogic state strings in BOTH
+            # net.xml and tll.xml using netconvert's actual link ordering.
+            self._fix_tl_logics_post_netconvert(
+                paths["net"], paths["tl_logics"], data["tl_logics"],
+            )
 
         return paths
+
+    @staticmethod
+    def _read_tl_link_ordering(net_path):
+        """For each tl in net.xml, return the controlled connections in
+        linkIndex order as a list of (from, to, fromLane, toLane) tuples.
+        """
+        tree = etree.parse(str(net_path))
+        tl_links = {}  # tl_id -> {linkIndex: (from, to, fromLane, toLane)}
+        for conn in tree.getroot().findall("connection"):
+            tl = conn.get("tl")
+            if not tl:
+                continue
+            idx = int(conn.get("linkIndex"))
+            tup = (conn.get("from"), conn.get("to"),
+                   int(conn.get("fromLane")), int(conn.get("toLane")))
+            tl_links.setdefault(tl, {})[idx] = tup
+        return {tl: [d[i] for i in sorted(d.keys())] for tl, d in tl_links.items()}
+
+    @classmethod
+    def _fix_tl_logics_post_netconvert(cls, net_path, tll_path, tl_logics):
+        """Rewrite tlLogic state strings in both net.xml and tll.xml so they
+        match netconvert's actual linkIndex assignment.
+        """
+        ordering = cls._read_tl_link_ordering(net_path)
+        by_id = {tl["id"]: tl for tl in tl_logics}
+
+        # Compute corrected state strings per tl, and stash them back into
+        # the in-memory tl_logics so the tll.xml rewrite below picks them up.
+        for tl_id, ordered in ordering.items():
+            mem_tl = by_id.get(tl_id)
+            if not mem_tl:
+                continue
+            idx_of = {tup: i for i, tup in enumerate(ordered)}
+            n = len(ordered)
+            for ph in mem_tl["phases"]:
+                state = ["r"] * n
+                for tup in ph.get("active_links", []):
+                    if tup in idx_of:
+                        state[idx_of[tup]] = "G"
+                ph["state"] = "".join(state)
+
+        # Patch the net.xml in place.
+        tree = etree.parse(str(net_path))
+        root = tree.getroot()
+        for tlLogic in root.findall("tlLogic"):
+            mem_tl = by_id.get(tlLogic.get("id"))
+            if not mem_tl:
+                continue
+            phase_elems = tlLogic.findall("phase")
+            for phase_elem, ph in zip(phase_elems, mem_tl["phases"]):
+                phase_elem.set("state", ph["state"])
+                phase_elem.set("duration", str(ph["duration"]))
+        tree.write(str(net_path), pretty_print=True,
+                   xml_declaration=True, encoding="UTF-8")
+
+        # And re-emit the standalone tll.xml so it stays consistent.
+        cls._write_tl_logics_xml(tl_logics, tll_path)
 
     # ------------------------------------------------------------------
     # Layer 2: SUMO-shaped adapters (STUBS)
@@ -282,24 +346,46 @@ class SumoConverter:
                     link_to_movement_idx.append(i)
             n_links = len(link_to_movement_idx)
 
+            # Per-movement connection tuples — used by the post-netconvert
+            # fix step to rebuild state strings against netconvert's actual
+            # linkIndex assignment (which may differ from our declared one).
+            movement_to_tuples = {
+                mvmt_id: [
+                    (movements[mvmt_id]["startRoad"],
+                     movements[mvmt_id]["endRoad"],
+                     int(ll["startLaneIndex"]),
+                     int(ll["endLaneIndex"]))
+                    for ll in movements[mvmt_id]["laneLinks"]
+                ]
+                for mvmt_id in sorted_keys
+            }
+
             # All-red guard phase, same convention as CityFlow converter.
-            phases = [{"duration": 5.0, "state": "r" * n_links}]
+            phases = [{
+                "duration": 5.0,
+                "state": "r" * n_links,
+                "active_links": [],
+            }]
 
             for combo in combos:
-                active_movements = {
-                    key_to_movement_idx.get(str(mid))
-                    for mid in combo["mvmt_ids"]
-                }
-                active_movements.discard(None)
-                if not active_movements:
+                active_mvmt_ids = [
+                    str(mid) for mid in combo["mvmt_ids"]
+                    if str(mid) in key_to_movement_idx
+                ]
+                if not active_mvmt_ids:
                     continue
+                active_movements = {key_to_movement_idx[m] for m in active_mvmt_ids}
                 state = "".join(
                     "G" if link_to_movement_idx[k] in active_movements else "r"
                     for k in range(n_links)
                 )
+                active_links = []
+                for mvmt_id in active_mvmt_ids:
+                    active_links.extend(movement_to_tuples[mvmt_id])
                 phases.append({
                     "duration": float(combo["min_green"]),
                     "state": state,
+                    "active_links": active_links,
                 })
 
             tl_logics.append({
