@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from gmns.core import load_gmns_data_and_config
+from gmns.core import load_gmns_data_and_config, _crs_from_config
 from gmns.movements import build_movement_index, build_turn_movements_by_node
 from gmns.network import (
     build_network_links,
@@ -11,23 +11,26 @@ from gmns.network import (
     select_vehicle_nodes,
 )
 from gmns.traffic_control import (
-    build_timing_phase_to_movements,
-    build_valid_phase_combinations,
+    build_valid_phase_combinations_for_network,
 )
 
 
 class CityFlowConverter:
-    def __init__(self, gmns_folder):
+    def __init__(self, gmns_folder, crs=None):
         self.gmns_folder = Path(gmns_folder)
+        self.crs = crs
 
     def convert(self):
-        gmns_data, _ = load_gmns_data_and_config(str(self.gmns_folder))
+        gmns_data, config_df, units = load_gmns_data_and_config(str(self.gmns_folder))
+        print(f"  units: {units.describe()}")
+        crs = self.crs if self.crs is not None else _crs_from_config(config_df)
+        print(f"  crs  : {crs}")
 
-        vehicle_links = prepare_vehicle_links(gmns_data["link"])
+        vehicle_links = prepare_vehicle_links(gmns_data["link"], units)
         all_nodes, link_to_road_map, _ = prepare_vehicle_link_mappings(vehicle_links)
 
-        selected_nodes = select_vehicle_nodes(gmns_data["node"], all_nodes)
-        selected_lanes = select_vehicle_lanes(gmns_data["lane"], link_to_road_map)
+        selected_nodes = select_vehicle_nodes(gmns_data["node"], all_nodes, crs)
+        selected_lanes = select_vehicle_lanes(gmns_data["lane"], link_to_road_map, units)
 
         turn_movements_by_node = build_turn_movements_by_node(
             gmns_data,
@@ -35,23 +38,10 @@ class CityFlowConverter:
         )
         movement_index = build_movement_index(turn_movements_by_node)
 
-        timing_phase_to_movements = build_timing_phase_to_movements(gmns_data)
-        timing_plan_to_node = (
-            gmns_data["signal_timing_plan"]
-            .set_index("timing_plan_id")["controller_id"]
-            .astype(int)
-            .to_dict()
-        )
-
-        signal_timing_phase = gmns_data["signal_timing_phase"].copy()
-        signal_timing_phase["node"] = signal_timing_phase["timing_plan_id"].map(
-            timing_plan_to_node
-        )
-
-        valid_phase_combinations = build_valid_phase_combinations(
-            signal_timing_phase,
-            timing_phase_to_movements,
+        valid_phase_combinations = build_valid_phase_combinations_for_network(
+            gmns_data,
             movement_index,
+            turn_movements_by_node,
         )
         traffic_phases_by_node = self._generate_lightphases(
             valid_phase_combinations,

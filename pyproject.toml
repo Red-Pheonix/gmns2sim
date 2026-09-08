@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gmns2sim"
+version = "0.1.0"
+description = "Convert a GMNS network to SUMO or CityFlow"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "pandas",
+    "pyproj",
+    "lxml",
+    "gmnspy",
+]
+
+[project.optional-dependencies]
+# netconvert, for merging the generated XMLs into a .net.xml
+sumo = ["eclipse-sumo"]
+
+[project.scripts]
+gmns2sim = "convert:main"
+
+[tool.setuptools]
+# Top-level modules kept as-is so existing absolute imports
+# (`from gmns.core import ...`) keep working.
+packages = ["gmns", "converter", "utils"]
+py-modules = ["convert"]

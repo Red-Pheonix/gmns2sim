@@ -34,6 +34,14 @@ def parse_args():
         help="(cityflow only) JSON indentation level. Defaults to 4.",
     )
     parser.add_argument(
+        "--crs",
+        default=None,
+        help="CRS of the input node coordinates (EPSG code). Defaults to the "
+             "crs field in config.csv, then 4326. Geographic lon/lat inputs "
+             "are projected to UTM meters; already-projected inputs "
+             "(e.g. 32619) are left as-is.",
+    )
+    parser.add_argument(
         "--no-netconvert",
         action="store_true",
         help="(sumo only) Skip the netconvert merge step; emit input XMLs only.",
@@ -55,7 +63,7 @@ def main():
                 raise SystemExit("Missing required dependency: gmnspy") from exc
             raise
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = CityFlowConverter(args.input).write(
+        output_path = CityFlowConverter(args.input, crs=args.crs).write(
             output_dir / f"{basename}.json",
             indent=args.indent,
         )
@@ -67,7 +75,7 @@ def main():
             if exc.name == "gmnspy":
                 raise SystemExit("Missing required dependency: gmnspy") from exc
             raise
-        paths = SumoConverter(args.input).write(
+        paths = SumoConverter(args.input, crs=args.crs).write(
             output_dir,
             basename=basename,
             run_netconvert=not args.no_netconvert,

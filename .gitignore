@@ -5,3 +5,9 @@ __pycache__/
 *json
 datasets/*
 *.svg
+output
+
+# packaging
+build/
+dist/
+*.egg-info/

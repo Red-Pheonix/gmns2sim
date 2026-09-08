@@ -19,7 +19,7 @@ import subprocess
 
 from lxml import etree
 
-from gmns.core import load_gmns_data_and_config
+from gmns.core import load_gmns_data_and_config, _crs_from_config
 from gmns.movements import build_movement_index, build_turn_movements_by_node
 from gmns.network import (
     build_network_links,
@@ -29,14 +29,29 @@ from gmns.network import (
     select_vehicle_nodes,
 )
 from gmns.traffic_control import (
-    build_timing_phase_to_movements,
-    build_valid_phase_combinations,
+    build_valid_phase_combinations_for_network,
 )
 
 
+def _mvmt_sort_key(mvmt_id):
+    """Deterministic movement ordering.
+
+    The linkIndex written into the connections file and the column order of the
+    tll state string are both derived from this ordering — if the two diverge,
+    netconvert rejects the network with "Invalid linkIndex". GMNS types ids as
+    "any", so numeric ids keep numeric order and anything else sorts as text.
+    """
+    text = str(mvmt_id)
+    try:
+        return (0, float(text), "")
+    except ValueError:
+        return (1, 0.0, text)
+
+
 class SumoConverter:
-    def __init__(self, gmns_folder):
+    def __init__(self, gmns_folder, crs=None):
         self.gmns_folder = Path(gmns_folder)
+        self.crs = crs
 
     # ------------------------------------------------------------------
     # Top-level pipeline
@@ -52,17 +67,20 @@ class SumoConverter:
                 "tl_logics":   [...],   # → .tll.xml
             }
         """
-        gmns_data, _ = load_gmns_data_and_config(str(self.gmns_folder))
+        gmns_data, config_df, units = load_gmns_data_and_config(str(self.gmns_folder))
+        print(f"  units: {units.describe()}")
+        crs = self.crs if self.crs is not None else _crs_from_config(config_df)
+        print(f"  crs  : {crs}")
 
         # --- Layer 1: shared GMNS pipeline (identical to CityFlow converter) -
         # NOTE: these helpers were written with CityFlow's shapes in mind. We
         # still reuse them, but the Layer-2 adapters below may need to massage
         # their output into SUMO's expected form.
-        vehicle_links = prepare_vehicle_links(gmns_data["link"])
+        vehicle_links = prepare_vehicle_links(gmns_data["link"], units)
         all_nodes, link_to_road_map, _ = prepare_vehicle_link_mappings(vehicle_links)
 
-        selected_nodes = select_vehicle_nodes(gmns_data["node"], all_nodes)
-        selected_lanes = select_vehicle_lanes(gmns_data["lane"], link_to_road_map)
+        selected_nodes = select_vehicle_nodes(gmns_data["node"], all_nodes, crs)
+        selected_lanes = select_vehicle_lanes(gmns_data["lane"], link_to_road_map, units)
 
         turn_movements_by_node = build_turn_movements_by_node(
             gmns_data,
@@ -70,23 +88,10 @@ class SumoConverter:
         )
         movement_index = build_movement_index(turn_movements_by_node)
 
-        timing_phase_to_movements = build_timing_phase_to_movements(gmns_data)
-        timing_plan_to_node = (
-            gmns_data["signal_timing_plan"]
-            .set_index("timing_plan_id")["controller_id"]
-            .astype(int)
-            .to_dict()
-        )
-
-        signal_timing_phase = gmns_data["signal_timing_phase"].copy()
-        signal_timing_phase["node"] = signal_timing_phase["timing_plan_id"].map(
-            timing_plan_to_node
-        )
-
-        valid_phase_combinations = build_valid_phase_combinations(
-            signal_timing_phase,
-            timing_phase_to_movements,
+        valid_phase_combinations = build_valid_phase_combinations_for_network(
+            gmns_data,
             movement_index,
+            turn_movements_by_node,
         )
 
         network_links = build_network_links(
@@ -190,10 +195,13 @@ class SumoConverter:
             idx_of = {tup: i for i, tup in enumerate(ordered)}
             n = len(ordered)
             for ph in mem_tl["phases"]:
+                # A yellow phase serves the same links as the green it follows,
+                # so the character has to come from the phase, not be assumed.
+                on = ph.get("signal_char", "G")
                 state = ["r"] * n
                 for tup in ph.get("active_links", []):
                     if tup in idx_of:
-                        state[idx_of[tup]] = "G"
+                        state[idx_of[tup]] = on
                 ph["state"] = "".join(state)
 
         # Patch the net.xml in place.
@@ -285,7 +293,7 @@ class SumoConverter:
         connections = []
         for node_id, movements in turn_movements_by_node.items():
             is_signal = node_id in signalized_node_ids
-            sorted_keys = sorted(movements.keys(), key=int)
+            sorted_keys = sorted(movements.keys(), key=_mvmt_sort_key)
             link_idx = 0
 
             for mvmt_id in sorted_keys:
@@ -334,7 +342,7 @@ class SumoConverter:
             if not movements:
                 continue
 
-            sorted_keys = sorted(movements.keys(), key=int)
+            sorted_keys = sorted(movements.keys(), key=_mvmt_sort_key)
             key_to_movement_idx = {k: i for i, k in enumerate(sorted_keys)}
 
             # link_to_movement_idx[k] = which movement (by sorted index) owns
@@ -360,12 +368,11 @@ class SumoConverter:
                 for mvmt_id in sorted_keys
             }
 
-            # All-red guard phase, same convention as CityFlow converter.
-            phases = [{
-                "duration": 5.0,
-                "state": "r" * n_links,
-                "active_links": [],
-            }]
+            # Each served phase is green -> yellow -> all-red, which is what
+            # makes the generated cycle add up to the source cycle length.
+            # Green is max_green: for a coordinated plan that is the split the
+            # phase actually gets, whereas min_green is only its floor.
+            phases = []
 
             for combo in combos:
                 active_mvmt_ids = [
@@ -375,18 +382,42 @@ class SumoConverter:
                 if not active_mvmt_ids:
                     continue
                 active_movements = {key_to_movement_idx[m] for m in active_mvmt_ids}
-                state = "".join(
+                green_state = "".join(
                     "G" if link_to_movement_idx[k] in active_movements else "r"
                     for k in range(n_links)
                 )
+                yellow_state = green_state.replace("G", "y")
                 active_links = []
                 for mvmt_id in active_mvmt_ids:
                     active_links.extend(movement_to_tuples[mvmt_id])
+
+                green = float(combo.get("max_green") or combo["min_green"])
+                yellow = float(combo.get("yellow", 3.0))
+                all_red = max(float(combo.get("all_red", 0.0)), 0.0)
+
                 phases.append({
-                    "duration": float(combo["min_green"]),
-                    "state": state,
+                    "duration": green,
+                    "state": green_state,
+                    "signal_char": "G",
                     "active_links": active_links,
                 })
+                if yellow > 0:
+                    phases.append({
+                        "duration": yellow,
+                        "state": yellow_state,
+                        "signal_char": "y",
+                        "active_links": active_links,
+                    })
+                if all_red > 0:
+                    phases.append({
+                        "duration": all_red,
+                        "state": "r" * n_links,
+                        "active_links": [],
+                    })
+
+            if not phases:      # nothing served; keep the network loadable
+                phases = [{"duration": 5.0, "state": "r" * n_links,
+                           "active_links": []}]
 
             tl_logics.append({
                 "id": node_id,
