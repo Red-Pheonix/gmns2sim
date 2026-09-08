@@ -3,7 +3,7 @@
 Convert a [GMNS](https://github.com/zephyr-data-specs/GMNS) network into a simulator's
 native format. SUMO and CityFlow are supported.
 
-The repo is still named `GMNS2UTDF`; the installable package is `gmns2sim`. For UTDF
+The installable package is `gmns2sim`. For UTDF
 *input*, see [utdf2gmns](https://github.com/xyluo25/utdf2gmns).
 
 ## Install
