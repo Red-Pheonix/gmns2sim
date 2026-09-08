@@ -67,7 +67,19 @@ class CityFlowConverter:
             "roads": roads,
         }
 
-    def write(self, output_path, indent=4):
+    def write(self, output_path, indent=4, write_config=True,
+              interval=1.0, seed=0, save_replay=True):
+        """Write the CityFlow roadnet JSON, and by default the config and flow
+        files that go with it.
+
+        CityFlow will not open a roadnet on its own: the engine is constructed
+        from a config.json, which must name both a roadnet and a flow file that
+        exist. The converter produces no demand, so the flow is written empty —
+        valid, loadable, and the obvious place to add vehicles.
+
+        Returns the roadnet Path when write_config is False, otherwise a dict
+        of {"roadnet", "flow", "config"} Paths.
+        """
         cityflow_network = self.convert()
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -75,7 +87,34 @@ class CityFlowConverter:
         with output_path.open("w") as output_file:
             json.dump(cityflow_network, output_file, indent=indent)
 
-        return output_path
+        if not write_config:
+            return output_path
+
+        stem = output_path.stem
+        flow_path = output_path.with_name(f"{stem}_flow.json")
+        config_path = output_path.with_name(f"{stem}_config.json")
+
+        with flow_path.open("w") as flow_file:
+            json.dump([], flow_file, indent=indent)
+
+        # dir is "./" and the file names are bare, so the folder can be moved
+        # or zipped and CityFlow still finds everything.
+        config = {
+            "interval": interval,
+            "seed": seed,
+            "dir": "./",
+            "roadnetFile": output_path.name,
+            "flowFile": flow_path.name,
+            "rlTrafficLight": False,
+            "laneChange": False,
+            "saveReplay": save_replay,
+            "roadnetLogFile": f"{stem}_replay_roadnet.json",
+            "replayLogFile": f"{stem}_replay.txt",
+        }
+        with config_path.open("w") as config_file:
+            json.dump(config, config_file, indent=indent)
+
+        return {"roadnet": output_path, "flow": flow_path, "config": config_path}
 
     @staticmethod
     def _generate_lightphases(valid_phase_combinations, turn_movements_by_node):
@@ -93,11 +132,14 @@ class CityFlowConverter:
             if not movements:
                 continue
 
-            key_to_index = {
-                k: i for i, k in enumerate(sorted(movements.keys(), key=int))
-            }
+            # availableRoadLinks are indices into the intersection's roadLinks,
+            # which _build_intersections builds from this same dict in this
+            # same order. Sorting here instead would silently point every phase
+            # at the wrong movements. GMNS ids are "any" (utdf2gmns emits e.g.
+            # "106_39_74_SBL"), so sorting numerically also raises.
+            key_to_index = {str(k): i for i, k in enumerate(movements.keys())}
 
-            lightphases = [{"time": 5.0, "availableRoadLinks": []}]
+            lightphases = []
             road_link_indices = set()
 
             for combo in combos:
@@ -109,12 +151,21 @@ class CityFlowConverter:
                     continue
 
                 road_link_indices.update(valid_movements)
+                # The green actually served is max_green (the split), not
+                # min_green; using min_green makes every cycle come out short.
                 lightphases.append(
                     {
-                        "time": combo["min_green"],
-                        "availableRoadLinks": valid_movements,
+                        "time": float(combo["max_green"]),
+                        "availableRoadLinks": sorted(valid_movements),
                     }
                 )
+                # CityFlow has no yellow, so the clearance is an all-red phase.
+                # Without it the cycle no longer matches the source timing.
+                clearance = float(combo["yellow"]) + float(combo["all_red"])
+                if clearance > 0:
+                    lightphases.append(
+                        {"time": clearance, "availableRoadLinks": []}
+                    )
 
             traffic_phases_by_node[node_id] = {
                 "roadLinkIndices": sorted(road_link_indices),

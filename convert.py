@@ -63,11 +63,15 @@ def main():
                 raise SystemExit("Missing required dependency: gmnspy") from exc
             raise
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = CityFlowConverter(args.input, crs=args.crs).write(
+        produced = CityFlowConverter(args.input, crs=args.crs).write(
             output_dir / f"{basename}.json",
             indent=args.indent,
         )
-        print(f"  cityflow     {output_path}")
+        if isinstance(produced, dict):
+            for kind, p in produced.items():
+                print(f"  {kind:<12} {p}")
+        else:
+            print(f"  roadnet      {produced}")
     else:
         try:
             from converter import SumoConverter

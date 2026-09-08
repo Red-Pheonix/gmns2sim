@@ -123,9 +123,19 @@ class SumoConverter:
             "tl_logics": tl_logics,
         }
 
-    def write(self, output_dir, basename=None, run_netconvert=True):
+    def write(self, output_dir, basename=None, run_netconvert=True,
+              write_sumocfg=True, begin=0, end=3600, route_files=None):
         """Write the four netconvert input files and (optionally) invoke
-        netconvert to produce <basename>.net.xml.
+        netconvert to produce <basename>.net.xml and a <basename>.sumocfg.
+
+        Args:
+            write_sumocfg (bool): also emit the .sumocfg that `sumo` and
+                `sumo-gui` open directly. Requires the merged net.
+            begin, end (int): simulation time window written into the config.
+            route_files (str | list): route file name(s) to reference. The
+                converter does not generate demand, so this is left out
+                entirely unless the caller supplies it — a .sumocfg naming a
+                route file that does not exist fails to load.
 
         Returns a dict mapping section name -> produced Path.
         """
@@ -159,7 +169,43 @@ class SumoConverter:
                 paths["net"], paths["tl_logics"], data["tl_logics"],
             )
 
+            if write_sumocfg:
+                paths["sumocfg"] = output_dir / f"{basename}.sumocfg"
+                self._write_sumocfg(
+                    paths["sumocfg"], paths["net"].name,
+                    begin=begin, end=end, route_files=route_files,
+                )
+
         return paths
+
+    @staticmethod
+    def _write_sumocfg(cfg_path, net_file, *, begin=0, end=3600, route_files=None):
+        """Write the .sumocfg that `sumo -c` and `sumo-gui` load directly.
+
+        Paths are written relative to the config, so the output folder can be
+        moved or zipped and still open.
+        """
+        root = etree.Element("configuration")
+
+        inputs = etree.SubElement(root, "input")
+        etree.SubElement(inputs, "net-file").set("value", str(net_file))
+        if route_files:
+            if not isinstance(route_files, str):
+                route_files = ",".join(str(r) for r in route_files)
+            etree.SubElement(inputs, "route-files").set("value", route_files)
+
+        time = etree.SubElement(root, "time")
+        etree.SubElement(time, "begin").set("value", str(begin))
+        etree.SubElement(time, "end").set("value", str(end))
+
+        report = etree.SubElement(root, "report")
+        etree.SubElement(report, "no-step-log").set("value", "true")
+
+        etree.ElementTree(root).write(
+            str(cfg_path), pretty_print=True,
+            xml_declaration=True, encoding="UTF-8",
+        )
+        return cfg_path
 
     @staticmethod
     def _read_tl_link_ordering(net_path):
