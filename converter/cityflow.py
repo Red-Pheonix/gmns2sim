@@ -139,7 +139,13 @@ class CityFlowConverter:
             # "106_39_74_SBL"), so sorting numerically also raises.
             key_to_index = {str(k): i for i, k in enumerate(movements.keys())}
 
-            lightphases = []
+            # The phase list is shaped for Sim2Signal/LibSignal's CityFlow
+            # loader, which hardcodes phase 0 as the yellow/guard phase and
+            # treats EVERY other index as an actionable green phase. So: one
+            # empty 5 s guard first, then green phases only -- no clearance
+            # phases, which would each become an extra RL action. Phase times
+            # after index 0 are ignored by that loader (the agent decides).
+            lightphases = [{"time": 5.0, "availableRoadLinks": []}]
             road_link_indices = set()
 
             for combo in combos:
@@ -151,21 +157,12 @@ class CityFlowConverter:
                     continue
 
                 road_link_indices.update(valid_movements)
-                # The green actually served is max_green (the split), not
-                # min_green; using min_green makes every cycle come out short.
                 lightphases.append(
                     {
-                        "time": float(combo["max_green"]),
+                        "time": combo["min_green"],
                         "availableRoadLinks": sorted(valid_movements),
                     }
                 )
-                # CityFlow has no yellow, so the clearance is an all-red phase.
-                # Without it the cycle no longer matches the source timing.
-                clearance = float(combo["yellow"]) + float(combo["all_red"])
-                if clearance > 0:
-                    lightphases.append(
-                        {"time": clearance, "availableRoadLinks": []}
-                    )
 
             traffic_phases_by_node[node_id] = {
                 "roadLinkIndices": sorted(road_link_indices),
